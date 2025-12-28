@@ -1,5 +1,5 @@
 {
   "variants": {
-    "": { "model": "mobcapture:block/dungeon_spawner" }
+    "": { "model": "minecraft:block/emerald_block" }
   }
 }

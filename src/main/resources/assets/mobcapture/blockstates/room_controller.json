@@ -1,3 +1,5 @@
 {
-  "variants": { "": { "model": "mobcapture:block/room_controller" } }
+  "variants": {
+    "": { "model": "minecraft:block/command_block" }
+  }
 }

@@ -1,4 +1,3 @@
 {
-  "parent": "minecraft:block/cube_all",
-  "textures": { "all": "minecraft:block/stone" }
+  "parent": "minecraft:block/command_block"
 }
