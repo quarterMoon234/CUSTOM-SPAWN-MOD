@@ -1,0 +1,13 @@
+{
+  "portal.enter": {
+    "category": "ambient",
+    "sounds": [
+      {
+        "name": "mobcapture:portal_enter",
+        "stream": false,
+        "volume": 1.0,
+        "pitch": 1.0
+      }
+    ]
+  }
+}

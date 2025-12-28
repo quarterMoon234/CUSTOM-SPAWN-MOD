@@ -1,0 +1,5 @@
+{
+  "variants": {
+    "": { "model": "mobcapture:block/dungeon_spawner" }
+  }
+}
