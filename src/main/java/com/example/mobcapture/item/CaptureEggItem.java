@@ -1,10 +1,8 @@
 package com.example.mobcapture.item;
 
 import com.example.mobcapture.blockentity.DungeonSpawnerBlockEntity;
-import com.example.mobcapture.registry.ModBlocks;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.Item;
@@ -12,10 +10,12 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.network.chat.Component;
 
 public class CaptureEggItem extends Item {
 
-    // 캡처알에 저장되는 엔티티 타입 키(기존 데이터 호환 유지)
+    // ✅ 캡처알에 저장해둔 엔티티 타입 키 (당신 프로젝트에서 실제로 쓰는 키와 반드시 같아야 함)
+    // 지금까지 코드 흐름상 "entity_type" 을 쓰고 있었으니 그대로 둡니다.
     private static final String TAG_ENTITY_TYPE = "entity_type";
 
     public CaptureEggItem(Properties properties) {
@@ -27,34 +27,26 @@ public class CaptureEggItem extends Item {
         Level level = context.getLevel();
 
         // 서버에서만
-        if (level.isClientSide) {
-            return InteractionResult.SUCCESS;
-        }
+        if (level.isClientSide) return InteractionResult.SUCCESS;
 
         // OP만
         if (!(context.getPlayer() instanceof ServerPlayer sp) || !sp.hasPermissions(2)) {
             return InteractionResult.PASS;
         }
 
-        // 쉬프트 + 던전 스포너에만 적용
-        if (!sp.isShiftKeyDown()) {
-            return InteractionResult.PASS;
-        }
+        // 쉬프트 + 스포너에만 적용
+        if (!sp.isShiftKeyDown()) return InteractionResult.PASS;
 
         BlockPos pos = context.getClickedPos();
 
-        if (!level.getBlockState(pos).is(ModBlocks.DUNGEON_SPAWNER.get())) {
-            return InteractionResult.PASS;
-        }
-
+        // ✅ 블록 이름이 아니라 BlockEntity 타입으로 판별 (ModBlocks 필드명 의존 제거)
         BlockEntity be = level.getBlockEntity(pos);
         if (!(be instanceof DungeonSpawnerBlockEntity spawner)) {
             return InteractionResult.PASS;
         }
 
-        // ✅ 캡처알에서 몬스터 타입 가져오기 (BlockEntity에 의존하지 않음)
+        // ✅ 캡처알에서 몬스터 타입 가져오기 (BE 메서드 의존 제거)
         String typeId = getCapturedTypeId(context.getItemInHand());
-
         if (typeId == null) {
             sp.sendSystemMessage(Component.literal("캡처알이 비어있습니다."));
             return InteractionResult.SUCCESS;
@@ -68,17 +60,20 @@ public class CaptureEggItem extends Item {
     }
 
     /**
-     * ✅ 캡처알(ItemStack) NBT에서 엔티티 타입 읽기
-     * - 기존 태그 키("entity_type") 유지해서 이전 월드/아이템과 호환
+     * ✅ 캡처알 ItemStack NBT에서 entity_type 읽기
      */
-    private static String getCapturedTypeId(ItemStack captureEgg) {
-        if (captureEgg == null || captureEgg.isEmpty()) return null;
-        if (!captureEgg.hasTag()) return null;
+    private static String getCapturedTypeId(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) return null;
 
-        CompoundTag tag = captureEgg.getTag();
-        if (tag == null || !tag.contains(TAG_ENTITY_TYPE)) return null;
+        CompoundTag tag = stack.getTag();
+        if (tag == null) return null;
+
+        if (!tag.contains(TAG_ENTITY_TYPE)) return null;
 
         String v = tag.getString(TAG_ENTITY_TYPE);
-        return (v == null || v.isBlank()) ? null : v.trim();
+        if (v == null) return null;
+
+        v = v.trim();
+        return v.isBlank() ? null : v;
     }
 }

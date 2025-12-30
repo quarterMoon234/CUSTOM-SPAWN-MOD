@@ -1,5 +1,6 @@
 package com.example.mobcapture.blockentity;
 
+import com.example.mobcapture.blockentity.DungeonSpawnerBlockEntity;
 import com.example.mobcapture.registry.ModBlockEntities;
 import com.example.mobcapture.registry.ModSounds;
 import net.minecraft.ChatFormatting;
@@ -8,9 +9,9 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.LongTag;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.protocol.game.ClientboundClearTitlesPacket;
-import net.minecraft.network.protocol.game.ClientboundSetTitlesAnimationPacket;
+import net.minecraft.network.protocol.game.ClientboundSetSubtitleTextPacket;
 import net.minecraft.network.protocol.game.ClientboundSetTitleTextPacket;
+import net.minecraft.network.protocol.game.ClientboundSetTitlesAnimationPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundSource;
@@ -32,10 +33,6 @@ public class RoomControllerBlockEntity extends BlockEntity {
     private static final String TAG_ROOM_NAME = "room_name";
     private static final String TAG_TITLE_COLOR = "title_color";
 
-    // ✅ 플레이어가 마지막으로 본 “지역명” 저장 키 (PersistentData)
-    private static final String PDATA_ROOT = "mobcapture";
-    private static final String PDATA_LAST_REGION = "last_region_title";
-
     private UUID roomId = UUID.randomUUID();
     private int roomRadius = 10;
     private boolean spawned = false;
@@ -48,19 +45,33 @@ public class RoomControllerBlockEntity extends BlockEntity {
     private final Set<UUID> aliveMobs = new HashSet<>();
     private final Set<UUID> playersInside = new HashSet<>();
 
+    /**
+     * ✅ 플레이어별 “마지막으로 띄운 지역명” 기억
+     * - 같은 지역명으로 연속 진입하면 타이틀 안 띄움
+     * - 서버 메모리(저장 X). 서버 재시작 시 초기화되는게 정상.
+     */
+    private static final Map<UUID, String> LAST_SHOWN_TITLE = new java.util.concurrent.ConcurrentHashMap<>();
+
     public RoomControllerBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.ROOM_CONTROLLER_BE.get(), pos, state);
     }
 
     /* ===================== GET ===================== */
 
-    public UUID getRoomId() { return roomId; }
-    public int getRoomRadius() { return roomRadius; }
-    public String getRoomName() { return roomName == null ? "" : roomName; }
-    public String getTitleColorName() { return titleColorName; }
+    public UUID getRoomId() {
+        return roomId;
+    }
 
-    public boolean isTitleEnabled() {
-        return roomName != null && !roomName.isBlank();
+    public int getRoomRadius() {
+        return roomRadius;
+    }
+
+    public String getRoomName() {
+        return roomName;
+    }
+
+    public String getTitleColorName() {
+        return titleColorName;
     }
 
     /* ===================== SET ===================== */
@@ -70,13 +81,16 @@ public class RoomControllerBlockEntity extends BlockEntity {
         setChanged();
     }
 
-    /** ✅ 빈 값이면 타이틀 OFF */
+    /**
+     * ✅ 빈 값이면 “타이틀 비활성화”
+     * - Unknown Room 같은 강제값 넣지 않음
+     */
     public void setRoomName(String name) {
         if (name == null) name = "";
         name = name.trim();
 
         if (name.isBlank()) {
-            this.roomName = ""; // OFF
+            this.roomName = "";
             setChanged();
             return;
         }
@@ -120,12 +134,10 @@ public class RoomControllerBlockEntity extends BlockEntity {
             UUID id = p.getUUID();
             nowInside.add(id);
 
-            // ✅ 이번 틱에 “새로 들어온 플레이어”만 처리
             if (!be.playersInside.contains(id)) {
+                // ✅ 이번 틱에 새로 들어온 플레이어
                 be.playPortalEnterSound(p);
-
-                // ✅ 핵심: 타이틀 enabled이고 + “지역명이 바뀐 경우”에만 출력
-                be.tryShowRegionTitleOnEnter(p);
+                be.trySendRoomTitle(p); // ✅ 요구사항 반영된 타이틀 처리
             }
         }
         be.playersInside.clear();
@@ -159,61 +171,35 @@ public class RoomControllerBlockEntity extends BlockEntity {
         );
     }
 
-    /* ===================== REGION TITLE LOGIC ===================== */
-
-    /**
-     * ✅ 요구사항 구현 핵심
-     * - 같은 지역명(roomName)이면 타이틀을 보여주지 않는다.
-     * - 다른 지역명으로 “처음 진입”했을 때만 타이틀을 보여준다.
-     * - 저장은 플레이어 PersistentData에 기록(서버 재시작/재접속에도 유지)
-     */
-    private void tryShowRegionTitleOnEnter(ServerPlayer p) {
-        // 타이틀 OFF면 아무것도 하지 않음(패킷도 0)
-        if (!isTitleEnabled()) return;
-
-        String currentRegion = roomName.trim();
-        if (currentRegion.isBlank()) return;
-
-        String lastRegion = getLastRegionTitle(p);
-
-        // ✅ 같으면 출력 안 함
-        if (currentRegion.equals(lastRegion)) return;
-
-        // ✅ 다르면 출력 + 갱신
-        sendRoomTitle(p);
-        setLastRegionTitle(p, currentRegion);
-    }
-
-    private static String getLastRegionTitle(ServerPlayer p) {
-        try {
-            CompoundTag root = p.getPersistentData();
-            if (!root.contains(PDATA_ROOT, CompoundTag.TAG_COMPOUND)) return "";
-            CompoundTag mobcapture = root.getCompound(PDATA_ROOT);
-            return mobcapture.getString(PDATA_LAST_REGION);
-        } catch (Throwable ignored) {
-            return "";
-        }
-    }
-
-    private static void setLastRegionTitle(ServerPlayer p, String title) {
-        try {
-            CompoundTag root = p.getPersistentData();
-            CompoundTag mobcapture = root.contains(PDATA_ROOT, CompoundTag.TAG_COMPOUND)
-                    ? root.getCompound(PDATA_ROOT)
-                    : new CompoundTag();
-
-            mobcapture.putString(PDATA_LAST_REGION, title == null ? "" : title);
-            root.put(PDATA_ROOT, mobcapture);
-        } catch (Throwable ignored) {}
-    }
-
     /* ===================== TITLE ===================== */
 
-    private void sendRoomTitle(ServerPlayer p) {
+    /**
+     * ✅ 핵심 요구사항 구현:
+     * - roomName이 비활성이면(빈값) → 아예 타이틀을 “보내지 않음”
+     * - 마지막으로 보낸 타이틀과 동일하면 → “보내지 않음”
+     * - 다르면 → 타이틀 전송 + LAST_SHOWN_TITLE 갱신
+     */
+    private void trySendRoomTitle(ServerPlayer p) {
+
+        // 1) 타이틀 기능 자체 비활성이면: 아무것도 하지 않음(전송 X)
+        if (roomName == null || roomName.trim().isBlank()) {
+            return;
+        }
+
+        String nowTitle = roomName.trim();
+        UUID pid = p.getUUID();
+
+        // 2) 같은 지역이면 타이틀 전송 안함
+        String prevTitle = LAST_SHOWN_TITLE.get(pid);
+        if (prevTitle != null && prevTitle.equals(nowTitle)) {
+            return;
+        }
+
+        // 3) 다른 지역이면 타이틀 전송
         ChatFormatting color = toChatFormatting(titleColorName);
         if (color == null) color = ChatFormatting.GOLD;
 
-        Component title = Component.literal(roomName).withStyle(color, ChatFormatting.BOLD);
+        Component title = Component.literal(nowTitle).withStyle(color, ChatFormatting.BOLD);
 
         int fadeIn = 10;
         int stay = 40;
@@ -221,17 +207,10 @@ public class RoomControllerBlockEntity extends BlockEntity {
 
         p.connection.send(new ClientboundSetTitlesAnimationPacket(fadeIn, stay, fadeOut));
         p.connection.send(new ClientboundSetTitleTextPacket(title));
-    }
+        p.connection.send(new ClientboundSetSubtitleTextPacket(Component.empty()));
 
-    /** ✅ OFF로 바꾼 순간, 방 안 플레이어에게 잔상 제거 1회 */
-    public void clearTitlesForPlayersInRoom(ServerLevel level) {
-        try {
-            AABB box = new AABB(this.worldPosition).inflate(this.roomRadius);
-            List<ServerPlayer> players = level.getEntitiesOfClass(ServerPlayer.class, box);
-            for (ServerPlayer p : players) {
-                p.connection.send(new ClientboundClearTitlesPacket(true));
-            }
-        } catch (Throwable ignored) {}
+        // 4) 마지막 타이틀 갱신
+        LAST_SHOWN_TITLE.put(pid, nowTitle);
     }
 
     private static ChatFormatting toChatFormatting(String colorName) {
@@ -290,6 +269,20 @@ public class RoomControllerBlockEntity extends BlockEntity {
         aliveMobs.clear();
     }
 
+    /**
+     * ✅ 텔포 블록이 “클리어 됐나?” 물어볼 때 사용
+     */
+    public boolean isCleared(ServerLevel level) {
+        if (!spawned) return false;
+
+        aliveMobs.removeIf(id -> {
+            Entity e = level.getEntity(id);
+            return e == null || !e.isAlive();
+        });
+
+        return aliveMobs.isEmpty();
+    }
+
     /* ===================== SAVE / LOAD ===================== */
 
     @Override
@@ -300,7 +293,7 @@ public class RoomControllerBlockEntity extends BlockEntity {
         tag.putInt(TAG_ROOM_RADIUS, roomRadius);
         tag.putBoolean(TAG_SPAWNED, spawned);
 
-        // ✅ 비활성은 "" 그대로 저장
+        // ✅ roomName은 "" 그대로 저장 (비활성 유지)
         tag.putString(TAG_ROOM_NAME, roomName == null ? "" : roomName);
         tag.putString(TAG_TITLE_COLOR, titleColorName == null ? "gold" : titleColorName);
 
@@ -325,7 +318,9 @@ public class RoomControllerBlockEntity extends BlockEntity {
         titleColorName = tag.getString(TAG_TITLE_COLOR);
 
         if (roomRadius <= 0) roomRadius = 10;
-        if (roomName == null) roomName = ""; // ✅ Unknown으로 바꾸지 않음
+
+        // ✅ 비어있으면 그대로 "" 유지 (타이틀 비활성 유지)
+        if (roomName == null) roomName = "";
 
         String norm = normalizeColorName(titleColorName);
         titleColorName = (norm == null) ? "gold" : norm;
@@ -372,4 +367,5 @@ public class RoomControllerBlockEntity extends BlockEntity {
             default -> null;
         };
     }
+
 }

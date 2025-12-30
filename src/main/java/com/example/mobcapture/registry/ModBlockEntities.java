@@ -3,6 +3,7 @@ package com.example.mobcapture.registry;
 import com.example.mobcapture.MobCaptureMod;
 import com.example.mobcapture.blockentity.DungeonSpawnerBlockEntity;
 import com.example.mobcapture.blockentity.RoomControllerBlockEntity;
+import com.example.mobcapture.blockentity.TeleportBlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.registries.DeferredRegister;
@@ -27,6 +28,14 @@ public class ModBlockEntities {
                             RoomControllerBlockEntity::new,
                             ModBlocks.ROOM_CONTROLLER.get()
                     ).build(null));
+
+    public static final RegistryObject<BlockEntityType<TeleportBlockEntity>> TELEPORT_BLOCK_BE =
+            BLOCK_ENTITIES.register("teleport_block",
+                    () -> BlockEntityType.Builder.of(
+                            TeleportBlockEntity::new,
+                            ModBlocks.TELEPORT_BLOCK.get()
+                    ).build(null));
+
 
     public static void register(IEventBus modBus) {
         BLOCK_ENTITIES.register(modBus);

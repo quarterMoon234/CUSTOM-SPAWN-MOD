@@ -2,15 +2,16 @@ package com.example.mobcapture.command;
 
 import com.example.mobcapture.blockentity.DungeonSpawnerBlockEntity;
 import com.example.mobcapture.blockentity.RoomControllerBlockEntity;
+import com.example.mobcapture.blockentity.TeleportBlockEntity;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 
@@ -28,10 +29,9 @@ public class RoomCommand {
                                 .then(Commands.argument("value", IntegerArgumentType.integer(1, 128))
                                         .executes(ctx -> radius(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "value")))))
 
-                        // ✅ /room name            -> 비활성화
-                        // ✅ /room name <text...>  -> 이름 설정
+                        // /room name <text...>
+                        // ✅ 공백 포함 받기: greedyString
                         .then(Commands.literal("name")
-                                .executes(ctx -> name(ctx.getSource(), "")) // 인자 없이 OFF
                                 .then(Commands.argument("text", com.mojang.brigadier.arguments.StringArgumentType.greedyString())
                                         .executes(ctx -> name(ctx.getSource(),
                                                 com.mojang.brigadier.arguments.StringArgumentType.getString(ctx, "text")))))
@@ -46,39 +46,54 @@ public class RoomCommand {
         );
     }
 
-    /* ===================== link ===================== */
+    /* ===================== link (범용) ===================== */
 
     private static int link(CommandSourceStack source) {
         try {
             ServerPlayer player = source.getPlayerOrException();
             ServerLevel level = source.getLevel();
 
+            // 1) 플레이어가 바라보는 블록
             HitResult hit = player.pick(6.0D, 0.0F, false);
             if (!(hit instanceof BlockHitResult bhr)) {
-                source.sendFailure(Component.literal("스폰포인트(DungeonSpawner)를 바라보고 /room link 를 사용하세요."));
+                source.sendFailure(Component.literal("블록을 바라보고 /room link 를 사용하세요."));
                 return 0;
             }
 
             BlockPos targetPos = bhr.getBlockPos();
             BlockEntity targetBE = level.getBlockEntity(targetPos);
-            if (!(targetBE instanceof DungeonSpawnerBlockEntity)) {
-                source.sendFailure(Component.literal("바라보는 블록이 스폰포인트(DungeonSpawner)가 아닙니다."));
+            if (targetBE == null) {
+                source.sendFailure(Component.literal("바라보는 위치에 BlockEntity가 없습니다."));
                 return 0;
             }
 
+            // 2) 근처 컨트롤러 찾기(32)
             RoomControllerBlockEntity nearest = findNearestController(level, player.blockPosition(), 32);
             if (nearest == null) {
                 source.sendFailure(Component.literal("근처에 RoomController가 없습니다. (32블록 이내)"));
                 return 0;
             }
 
-            nearest.linkSpawnPoint(targetPos, nearest.getRoomId(), level);
+            // 3) 타입별 링크 처리
+            if (targetBE instanceof DungeonSpawnerBlockEntity) {
+                nearest.linkSpawnPoint(targetPos, nearest.getRoomId(), level);
+                source.sendSuccess(() -> Component.literal("링크 완료(SpawnPoint): " + targetPos + " → roomId=" + nearest.getRoomId()), true);
+                return 1;
+            }
 
-            source.sendSuccess(
-                    () -> Component.literal("링크 완료: spawnPoint=" + targetPos + " → roomId=" + nearest.getRoomId()),
-                    true
-            );
-            return 1;
+            if (targetBE instanceof TeleportBlockEntity tp) {
+                // ✅ 텔포블록에 컨트롤러 좌표 저장
+                tp.setLinkedController(nearest.getBlockPos());
+
+                // 저장/클라 갱신 확실히
+                level.sendBlockUpdated(targetPos, level.getBlockState(targetPos), level.getBlockState(targetPos), 3);
+
+                source.sendSuccess(() -> Component.literal("링크 완료(TeleportBlock): " + targetPos + " → controllerPos=" + nearest.getBlockPos()), true);
+                return 1;
+            }
+
+            source.sendFailure(Component.literal("바라보는 블록이 SpawnPoint(DungeonSpawner) 또는 TeleportBlock이 아닙니다."));
+            return 0;
 
         } catch (Throwable t) {
             source.sendFailure(Component.literal("링크 중 오류 발생 (콘솔 확인)"));
@@ -113,14 +128,7 @@ public class RoomCommand {
             if (rc == null) return 0;
 
             rc.setRoomName(text);
-
-            // ✅ 껐으면(빈값) 현재 방 안 플레이어에게 잔상 제거 1회
-            if (!rc.isTitleEnabled()) {
-                rc.clearTitlesForPlayersInRoom(source.getLevel());
-                source.sendSuccess(() -> Component.literal("Room title OFF (비활성화)"), true);
-            } else {
-                source.sendSuccess(() -> Component.literal("Room name 설정: " + rc.getRoomName()), true);
-            }
+            source.sendSuccess(() -> Component.literal("Room name 설정: " + (rc.getRoomName().isBlank() ? "(OFF)" : rc.getRoomName())), true);
             return 1;
 
         } catch (Throwable t) {
@@ -138,10 +146,9 @@ public class RoomCommand {
             if (rc == null) return 0;
 
             rc.setTitleColorName(value);
-
             source.sendSuccess(() -> Component.literal(
-                    "Title color 설정: " + rc.getTitleColorName() +
-                            " (예: gold, red, aqua, yellow, dark_red, light_purple, white)"
+                    "Title color 설정: " + rc.getTitleColorName()
+                            + " (예: gold, red, aqua, yellow, dark_red, light_purple, white)"
             ), true);
 
             return 1;
