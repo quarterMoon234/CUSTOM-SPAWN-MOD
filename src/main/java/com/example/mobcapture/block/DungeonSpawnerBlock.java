@@ -26,8 +26,6 @@ public class DungeonSpawnerBlock extends Block implements EntityBlock {
         return new DungeonSpawnerBlockEntity(pos, state);
     }
 
-    // ✅ getTicker 제거: RoomController가 스폰을 제어합니다.
-
     @Override
     public InteractionResult use(BlockState state, Level level, BlockPos pos,
                                  Player player, InteractionHand hand,
@@ -45,3 +43,4 @@ public class DungeonSpawnerBlock extends Block implements EntityBlock {
         return InteractionResult.SUCCESS;
     }
 }
+

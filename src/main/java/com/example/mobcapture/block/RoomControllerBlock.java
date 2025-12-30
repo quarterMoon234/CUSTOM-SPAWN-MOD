@@ -53,7 +53,10 @@ public class RoomControllerBlock extends Block implements EntityBlock {
         if (!(be instanceof RoomControllerBlockEntity rc)) return InteractionResult.PASS;
 
         sp.sendSystemMessage(Component.literal(
-                "RoomController: id=" + rc.getRoomId() + " | radius=" + rc.getRoomRadius()
+                "RoomController: id=" + rc.getRoomId()
+                        + " | radius=" + rc.getRoomRadius()
+                        + " | name=" + rc.getRoomName()
+                        + " | color=" + rc.getTitleColorName()
         ));
         return InteractionResult.SUCCESS;
     }

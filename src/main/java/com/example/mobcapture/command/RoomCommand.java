@@ -6,11 +6,11 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
-import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 
@@ -28,8 +28,10 @@ public class RoomCommand {
                                 .then(Commands.argument("value", IntegerArgumentType.integer(1, 128))
                                         .executes(ctx -> radius(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "value")))))
 
+                        // ✅ /room name            -> 비활성화
+                        // ✅ /room name <text...>  -> 이름 설정
                         .then(Commands.literal("name")
-                                // ✅ 텍스트를 공백 포함으로 받기 위해 greedyString 사용
+                                .executes(ctx -> name(ctx.getSource(), "")) // 인자 없이 OFF
                                 .then(Commands.argument("text", com.mojang.brigadier.arguments.StringArgumentType.greedyString())
                                         .executes(ctx -> name(ctx.getSource(),
                                                 com.mojang.brigadier.arguments.StringArgumentType.getString(ctx, "text")))))
@@ -111,7 +113,14 @@ public class RoomCommand {
             if (rc == null) return 0;
 
             rc.setRoomName(text);
-            source.sendSuccess(() -> Component.literal("Room name 설정: " + rc.getRoomName()), true);
+
+            // ✅ 껐으면(빈값) 현재 방 안 플레이어에게 잔상 제거 1회
+            if (!rc.isTitleEnabled()) {
+                rc.clearTitlesForPlayersInRoom(source.getLevel());
+                source.sendSuccess(() -> Component.literal("Room title OFF (비활성화)"), true);
+            } else {
+                source.sendSuccess(() -> Component.literal("Room name 설정: " + rc.getRoomName()), true);
+            }
             return 1;
 
         } catch (Throwable t) {
@@ -130,7 +139,6 @@ public class RoomCommand {
 
             rc.setTitleColorName(value);
 
-            // 허용 색 목록 안내
             source.sendSuccess(() -> Component.literal(
                     "Title color 설정: " + rc.getTitleColorName() +
                             " (예: gold, red, aqua, yellow, dark_red, light_purple, white)"
@@ -155,7 +163,7 @@ public class RoomCommand {
             source.sendSuccess(() -> Component.literal(
                     "RoomController: id=" + rc.getRoomId()
                             + " | radius=" + rc.getRoomRadius()
-                            + " | name=" + rc.getRoomName()
+                            + " | name=" + (rc.getRoomName().isBlank() ? "(OFF)" : rc.getRoomName())
                             + " | color=" + rc.getTitleColorName()
             ), false);
 
@@ -200,7 +208,6 @@ public class RoomCommand {
                     if (be instanceof RoomControllerBlockEntity rc) {
                         double d = p.distSqr(center);
                         if (d < bestDist) {
-                            bestDist = d;
                             bestDist = d;
                             best = rc;
                         }

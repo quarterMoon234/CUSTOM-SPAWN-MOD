@@ -9,8 +9,8 @@ import net.minecraftforge.registries.DeferredRegister;
 import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraftforge.registries.RegistryObject;
 
-
 public class ModBlockEntities {
+
     public static final DeferredRegister<BlockEntityType<?>> BLOCK_ENTITIES =
             DeferredRegister.create(ForgeRegistries.BLOCK_ENTITY_TYPES, MobCaptureMod.MODID);
 
@@ -21,10 +21,6 @@ public class ModBlockEntities {
                             ModBlocks.DUNGEON_SPAWNER.get()
                     ).build(null));
 
-    public static void register(IEventBus modBus) {
-        BLOCK_ENTITIES.register(modBus);
-    }
-
     public static final RegistryObject<BlockEntityType<RoomControllerBlockEntity>> ROOM_CONTROLLER_BE =
             BLOCK_ENTITIES.register("room_controller",
                     () -> BlockEntityType.Builder.of(
@@ -32,4 +28,7 @@ public class ModBlockEntities {
                             ModBlocks.ROOM_CONTROLLER.get()
                     ).build(null));
 
+    public static void register(IEventBus modBus) {
+        BLOCK_ENTITIES.register(modBus);
+    }
 }

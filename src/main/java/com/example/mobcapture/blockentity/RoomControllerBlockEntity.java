@@ -2,16 +2,17 @@ package com.example.mobcapture.blockentity;
 
 import com.example.mobcapture.registry.ModBlockEntities;
 import com.example.mobcapture.registry.ModSounds;
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.LongTag;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.protocol.game.ClientboundSetTitleTextPacket;
+import net.minecraft.network.protocol.game.ClientboundClearTitlesPacket;
 import net.minecraft.network.protocol.game.ClientboundSetTitlesAnimationPacket;
+import net.minecraft.network.protocol.game.ClientboundSetTitleTextPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
@@ -19,14 +20,9 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 
 public class RoomControllerBlockEntity extends BlockEntity {
-
-    /* ===================== NBT TAG ===================== */
 
     private static final String TAG_ROOM_ID = "room_id";
     private static final String TAG_ROOM_RADIUS = "room_radius";
@@ -34,67 +30,60 @@ public class RoomControllerBlockEntity extends BlockEntity {
     private static final String TAG_SPAWNED = "spawned";
     private static final String TAG_ALIVE_UUIDS = "alive_uuids";
     private static final String TAG_ROOM_NAME = "room_name";
-    private static final String TAG_TITLE_COLOR = "title_color"; // ex) "gold", "red", "aqua"
+    private static final String TAG_TITLE_COLOR = "title_color";
 
-    /* ===================== CONFIG ===================== */
+    // ✅ 플레이어가 마지막으로 본 “지역명” 저장 키 (PersistentData)
+    private static final String PDATA_ROOT = "mobcapture";
+    private static final String PDATA_LAST_REGION = "last_region_title";
 
     private UUID roomId = UUID.randomUUID();
     private int roomRadius = 10;
     private boolean spawned = false;
 
-    // 방 이름(타이틀)
-    private String roomName = "Unknown Room";
-
-    // 타이틀 색(이름 기반). 기본 gold
+    // ✅ 기본은 “타이틀 비활성”
+    private String roomName = "";
     private String titleColorName = "gold";
 
-    /* ===================== RUNTIME STATE ===================== */
-
-    // 연결된 스폰포인트 좌표들 (BlockPos.asLong)
     private final Set<Long> spawnPointPositions = new HashSet<>();
-
-    // 현재 방에서 스폰된 몹 UUID들(퇴장 시 완전 제거용)
     private final Set<UUID> aliveMobs = new HashSet<>();
-
-    // 방 안에 '현재' 들어와 있는 플레이어 UUID (입장 감지용, 저장할 필요 없음)
     private final Set<UUID> playersInside = new HashSet<>();
-
-    /* ===================== CONSTRUCTOR ===================== */
 
     public RoomControllerBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.ROOM_CONTROLLER_BE.get(), pos, state);
     }
 
-    /* ===================== GET / SET ===================== */
+    /* ===================== GET ===================== */
 
-    public UUID getRoomId() {
-        return roomId;
+    public UUID getRoomId() { return roomId; }
+    public int getRoomRadius() { return roomRadius; }
+    public String getRoomName() { return roomName == null ? "" : roomName; }
+    public String getTitleColorName() { return titleColorName; }
+
+    public boolean isTitleEnabled() {
+        return roomName != null && !roomName.isBlank();
     }
 
-    public int getRoomRadius() {
-        return roomRadius;
-    }
+    /* ===================== SET ===================== */
 
     public void setRoomRadius(int radius) {
         this.roomRadius = Math.max(1, Math.min(128, radius));
         setChanged();
     }
 
-    public String getRoomName() {
-        return roomName;
-    }
-
+    /** ✅ 빈 값이면 타이틀 OFF */
     public void setRoomName(String name) {
         if (name == null) name = "";
         name = name.trim();
-        if (name.isBlank()) name = "Unknown Room";
+
+        if (name.isBlank()) {
+            this.roomName = ""; // OFF
+            setChanged();
+            return;
+        }
+
         if (name.length() > 48) name = name.substring(0, 48);
         this.roomName = name;
         setChanged();
-    }
-
-    public String getTitleColorName() {
-        return titleColorName;
     }
 
     public void setTitleColorName(String colorName) {
@@ -104,7 +93,7 @@ public class RoomControllerBlockEntity extends BlockEntity {
         setChanged();
     }
 
-    /* ===================== LINK SPAWN POINT ===================== */
+    /* ===================== LINK ===================== */
 
     public void linkSpawnPoint(BlockPos spawnPointPos, UUID roomIdToSet, ServerLevel level) {
         spawnPointPositions.add(spawnPointPos.asLong());
@@ -123,30 +112,26 @@ public class RoomControllerBlockEntity extends BlockEntity {
         if (!(level instanceof ServerLevel server)) return;
 
         AABB box = new AABB(pos).inflate(be.roomRadius);
+        List<ServerPlayer> currentPlayers = server.getEntitiesOfClass(ServerPlayer.class, box);
 
-        // 현재 방 안 플레이어 목록
-        List<ServerPlayer> currentPlayers =
-                server.getEntitiesOfClass(ServerPlayer.class, box);
-
-        // (A) 입장 감지: 새로 들어온 플레이어에게만 타이틀 + 포탈 사운드
+        // (A) 입장 감지(플레이어별)
         Set<UUID> nowInside = new HashSet<>();
-
         for (ServerPlayer p : currentPlayers) {
             UUID id = p.getUUID();
             nowInside.add(id);
 
+            // ✅ 이번 틱에 “새로 들어온 플레이어”만 처리
             if (!be.playersInside.contains(id)) {
-                // 이번 틱에 새로 입장한 플레이어
                 be.playPortalEnterSound(p);
-                be.sendRoomTitle(p);
+
+                // ✅ 핵심: 타이틀 enabled이고 + “지역명이 바뀐 경우”에만 출력
+                be.tryShowRegionTitleOnEnter(p);
             }
         }
-
-        // 퇴장 반영
         be.playersInside.clear();
         be.playersInside.addAll(nowInside);
 
-        // (B) 스폰 로직 (기존 구조 유지)
+        // (B) 스폰/클리어
         boolean hasPlayer = !currentPlayers.isEmpty();
 
         if (hasPlayer && !be.spawned) {
@@ -163,42 +148,115 @@ public class RoomControllerBlockEntity extends BlockEntity {
         }
     }
 
-    /* ===================== ENTRY SOUND ===================== */
+    /* ===================== SOUND ===================== */
 
-    /**
-     * 포탈 이동 느낌 사운드(플레이어 개인 재생)
-     * - 주변 다른 플레이어에게는 들리지 않음
-     */
     private void playPortalEnterSound(ServerPlayer p) {
-        // ✅ RPG 포탈 이동 느낌
         p.playNotifySound(
                 ModSounds.PORTAL_ENTER.get(),
                 SoundSource.AMBIENT,
                 1.0f,
                 1.0f
         );
+    }
 
-        // 더 “차원 이동” 느낌을 원하면 아래로 바꿔도 됨(약간 길고 묵직):
-        // p.playNotifySound(SoundEvents.PORTAL_TRAVEL, SoundSource.PLAYERS, 0.7f, 1.0f);
+    /* ===================== REGION TITLE LOGIC ===================== */
+
+    /**
+     * ✅ 요구사항 구현 핵심
+     * - 같은 지역명(roomName)이면 타이틀을 보여주지 않는다.
+     * - 다른 지역명으로 “처음 진입”했을 때만 타이틀을 보여준다.
+     * - 저장은 플레이어 PersistentData에 기록(서버 재시작/재접속에도 유지)
+     */
+    private void tryShowRegionTitleOnEnter(ServerPlayer p) {
+        // 타이틀 OFF면 아무것도 하지 않음(패킷도 0)
+        if (!isTitleEnabled()) return;
+
+        String currentRegion = roomName.trim();
+        if (currentRegion.isBlank()) return;
+
+        String lastRegion = getLastRegionTitle(p);
+
+        // ✅ 같으면 출력 안 함
+        if (currentRegion.equals(lastRegion)) return;
+
+        // ✅ 다르면 출력 + 갱신
+        sendRoomTitle(p);
+        setLastRegionTitle(p, currentRegion);
+    }
+
+    private static String getLastRegionTitle(ServerPlayer p) {
+        try {
+            CompoundTag root = p.getPersistentData();
+            if (!root.contains(PDATA_ROOT, CompoundTag.TAG_COMPOUND)) return "";
+            CompoundTag mobcapture = root.getCompound(PDATA_ROOT);
+            return mobcapture.getString(PDATA_LAST_REGION);
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    private static void setLastRegionTitle(ServerPlayer p, String title) {
+        try {
+            CompoundTag root = p.getPersistentData();
+            CompoundTag mobcapture = root.contains(PDATA_ROOT, CompoundTag.TAG_COMPOUND)
+                    ? root.getCompound(PDATA_ROOT)
+                    : new CompoundTag();
+
+            mobcapture.putString(PDATA_LAST_REGION, title == null ? "" : title);
+            root.put(PDATA_ROOT, mobcapture);
+        } catch (Throwable ignored) {}
     }
 
     /* ===================== TITLE ===================== */
 
     private void sendRoomTitle(ServerPlayer p) {
-        // 색 변환 (이름 -> §코드)
-        String colorCode = toSectionColorCode(titleColorName); // ex) "§6"
-        if (colorCode == null) colorCode = "§6"; // gold fallback
+        ChatFormatting color = toChatFormatting(titleColorName);
+        if (color == null) color = ChatFormatting.GOLD;
 
-        // 굵게 + 색상
-        Component title = Component.literal(colorCode + "§l" + roomName);
+        Component title = Component.literal(roomName).withStyle(color, ChatFormatting.BOLD);
 
-        // (fadeIn, stay, fadeOut) : 틱 단위 (20틱=1초)
-        int fadeIn = 10;   // 0.5초
-        int stay = 40;     // 2초
-        int fadeOut = 15;  // 0.75초
+        int fadeIn = 10;
+        int stay = 40;
+        int fadeOut = 15;
 
         p.connection.send(new ClientboundSetTitlesAnimationPacket(fadeIn, stay, fadeOut));
         p.connection.send(new ClientboundSetTitleTextPacket(title));
+    }
+
+    /** ✅ OFF로 바꾼 순간, 방 안 플레이어에게 잔상 제거 1회 */
+    public void clearTitlesForPlayersInRoom(ServerLevel level) {
+        try {
+            AABB box = new AABB(this.worldPosition).inflate(this.roomRadius);
+            List<ServerPlayer> players = level.getEntitiesOfClass(ServerPlayer.class, box);
+            for (ServerPlayer p : players) {
+                p.connection.send(new ClientboundClearTitlesPacket(true));
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static ChatFormatting toChatFormatting(String colorName) {
+        String s = normalizeColorName(colorName);
+        if (s == null) return null;
+
+        return switch (s) {
+            case "black" -> ChatFormatting.BLACK;
+            case "dark_blue" -> ChatFormatting.DARK_BLUE;
+            case "dark_green" -> ChatFormatting.DARK_GREEN;
+            case "dark_aqua" -> ChatFormatting.DARK_AQUA;
+            case "dark_red" -> ChatFormatting.DARK_RED;
+            case "dark_purple" -> ChatFormatting.DARK_PURPLE;
+            case "gold" -> ChatFormatting.GOLD;
+            case "gray" -> ChatFormatting.GRAY;
+            case "dark_gray" -> ChatFormatting.DARK_GRAY;
+            case "blue" -> ChatFormatting.BLUE;
+            case "green" -> ChatFormatting.GREEN;
+            case "aqua" -> ChatFormatting.AQUA;
+            case "red" -> ChatFormatting.RED;
+            case "light_purple" -> ChatFormatting.LIGHT_PURPLE;
+            case "yellow" -> ChatFormatting.YELLOW;
+            case "white" -> ChatFormatting.WHITE;
+            default -> null;
+        };
     }
 
     /* ===================== SPAWN / CLEAR ===================== */
@@ -242,21 +300,16 @@ public class RoomControllerBlockEntity extends BlockEntity {
         tag.putInt(TAG_ROOM_RADIUS, roomRadius);
         tag.putBoolean(TAG_SPAWNED, spawned);
 
-        tag.putString(TAG_ROOM_NAME, roomName);
-        tag.putString(TAG_TITLE_COLOR, titleColorName);
+        // ✅ 비활성은 "" 그대로 저장
+        tag.putString(TAG_ROOM_NAME, roomName == null ? "" : roomName);
+        tag.putString(TAG_TITLE_COLOR, titleColorName == null ? "gold" : titleColorName);
 
-        // spawnpoints 저장
         ListTag spList = new ListTag();
-        for (Long p : spawnPointPositions) {
-            spList.add(LongTag.valueOf(p));
-        }
+        for (Long p : spawnPointPositions) spList.add(LongTag.valueOf(p));
         tag.put(TAG_SPAWNPOINTS, spList);
 
-        // alive uuid 저장
         ListTag alive = new ListTag();
-        for (UUID u : aliveMobs) {
-            alive.add(net.minecraft.nbt.StringTag.valueOf(u.toString()));
-        }
+        for (UUID u : aliveMobs) alive.add(net.minecraft.nbt.StringTag.valueOf(u.toString()));
         tag.put(TAG_ALIVE_UUIDS, alive);
     }
 
@@ -272,7 +325,7 @@ public class RoomControllerBlockEntity extends BlockEntity {
         titleColorName = tag.getString(TAG_TITLE_COLOR);
 
         if (roomRadius <= 0) roomRadius = 10;
-        if (roomName == null || roomName.isBlank()) roomName = "Unknown Room";
+        if (roomName == null) roomName = ""; // ✅ Unknown으로 바꾸지 않음
 
         String norm = normalizeColorName(titleColorName);
         titleColorName = (norm == null) ? "gold" : norm;
@@ -296,18 +349,15 @@ public class RoomControllerBlockEntity extends BlockEntity {
             }
         }
 
-        // 런타임 캐시
         playersInside.clear();
     }
 
     /* ===================== COLOR UTILS ===================== */
 
-    // 허용 색 이름 정규화. 허용: black,dark_blue,dark_green,dark_aqua,dark_red,dark_purple,gold,gray,dark_gray,blue,green,aqua,red,light_purple,yellow,white
     private static String normalizeColorName(String in) {
         if (in == null) return null;
         String s = in.trim().toLowerCase();
 
-        // 자주 쓰는 별칭 지원
         if (s.equals("pink")) s = "light_purple";
         if (s.equals("purple")) s = "dark_purple";
         if (s.equals("orange")) s = "gold";
@@ -319,32 +369,6 @@ public class RoomControllerBlockEntity extends BlockEntity {
             case "black", "dark_blue", "dark_green", "dark_aqua", "dark_red", "dark_purple",
                     "gold", "gray", "dark_gray", "blue", "green", "aqua", "red",
                     "light_purple", "yellow", "white" -> s;
-            default -> null;
-        };
-    }
-
-    // 색 이름 -> §코드
-    private static String toSectionColorCode(String colorName) {
-        String s = normalizeColorName(colorName);
-        if (s == null) return null;
-
-        return switch (s) {
-            case "black" -> "§0";
-            case "dark_blue" -> "§1";
-            case "dark_green" -> "§2";
-            case "dark_aqua" -> "§3";
-            case "dark_red" -> "§4";
-            case "dark_purple" -> "§5";
-            case "gold" -> "§6";
-            case "gray" -> "§7";
-            case "dark_gray" -> "§8";
-            case "blue" -> "§9";
-            case "green" -> "§a";
-            case "aqua" -> "§b";
-            case "red" -> "§c";
-            case "light_purple" -> "§d";
-            case "yellow" -> "§e";
-            case "white" -> "§f";
             default -> null;
         };
     }
