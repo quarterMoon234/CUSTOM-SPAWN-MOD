@@ -37,6 +37,10 @@ public class MobCaptureMod {
 
             // 🟥 Room Controller
             event.accept(ModBlocks.ROOM_CONTROLLER_ITEM.get());
+
+
+            // ✅ 텔레포트 블록 추가
+            event.accept(ModBlocks.TELEPORT_BLOCK_ITEM.get());
         }
     }
 }

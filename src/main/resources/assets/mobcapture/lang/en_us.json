@@ -1,5 +1,6 @@
 {
   "item.mobcapture.capture_egg": "Capture Egg",
   "block.mobcapture.dungeon_spawner": "Dungeon Spawner",
-  "block.mobcapture.room_controller": "Room Controller"
+  "block.mobcapture.room_controller": "Room Controller",
+  "block.mobcapture.teleport_block": "Teleport Block"
 }
